@@ -1,1 +1,3 @@
 datetime-settings = Datum, Uhrzeit und Kalendereinstellungen ...
+week = KW
+week-number = KW { $number }

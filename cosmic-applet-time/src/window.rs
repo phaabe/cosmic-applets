@@ -33,7 +33,11 @@ use std::sync::LazyLock;
 use timedate_zbus::TimeDateProxy;
 use tokio::{sync::watch, time};
 
-use crate::{config::TimeAppletConfig, fl, time::get_calendar_first};
+use crate::{
+    config::TimeAppletConfig,
+    fl,
+    time::{get_calendar_first, get_week_number},
+};
 use cosmic::applet::token::subscription::{
     TokenRequest, TokenUpdate, activation_token_subscription,
 };
@@ -52,6 +56,8 @@ static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"
 // so those specifiers aren't listed here. This list is non-exhaustive, and it's possible that %X
 // and other specifiers have to be added depending on locales.
 const STRFTIME_SECONDS: &[char] = &['S', 'T', '+', 's'];
+
+const WEEK_COLUMN_WIDTH: f32 = 32.0;
 
 fn get_system_locale() -> Locale {
     for var in ["LC_TIME", "LC_ALL", "LANG"] {
@@ -149,6 +155,18 @@ impl Window {
         let prefs = DateTimeFormatterPreferences::from(self.locale.clone());
         let weekday = DateTimeFormatter::try_new(prefs, fieldsets::E::short()).unwrap();
 
+        // The ISO week of a row is the week its Thursday belongs to, since that week always holds
+        // the majority of the row's days regardless of the first day of the week.
+        let thursday_offset = Weekday::Thursday.since(first_day_of_week);
+
+        if self.config.show_week_number {
+            calendar = calendar.push(
+                text::caption(fl!("week"))
+                    .apply(container)
+                    .center_x(Length::Fixed(WEEK_COLUMN_WIDTH)),
+            );
+        }
+
         for i in 0..7 {
             let date = first_day.checked_add(i.days()).unwrap();
             let datetime = self.create_datetime(&date);
@@ -163,6 +181,18 @@ impl Window {
         for i in 0..42 {
             if i > 0 && i % 7 == 0 {
                 calendar = calendar.insert_row();
+            }
+
+            if i % 7 == 0 && self.config.show_week_number {
+                let thursday = first_day
+                    .checked_add((i + thursday_offset).days())
+                    .expect("valid date in calendar range");
+                calendar = calendar.push(
+                    text::caption(get_week_number(thursday).to_string())
+                        .apply(container)
+                        .center(Length::Fixed(WEEK_COLUMN_WIDTH))
+                        .height(Length::Fixed(44.0)),
+                );
             }
 
             let date = first_day
@@ -187,6 +217,20 @@ impl Window {
         (!self.config.format_strftime.is_empty())
             .then(|| strtime::format(&self.config.format_strftime, &self.now).ok())
             .flatten()
+    }
+
+    /// Compact week number label for the panel, if enabled
+    fn panel_week_number(&self) -> Option<String> {
+        match (
+            self.config.show_date_in_top_panel,
+            self.config.show_week_number,
+        ) {
+            (true, true) => Some(fl!(
+                "week-number",
+                number = get_week_number(self.now.date())
+            )),
+            _ => None,
+        }
     }
 
     fn vertical_layout(&self) -> Element<'_, Message> {
@@ -214,6 +258,9 @@ impl Window {
 
                 for p in formatted_date.split_whitespace() {
                     elements.push(self.core.applet.text(p.to_owned()).into());
+                }
+                if let Some(week) = self.panel_week_number() {
+                    elements.push(self.core.applet.text(week).into());
                 }
                 elements.push(
                     rule::horizontal(2)
@@ -269,7 +316,7 @@ impl Window {
             });
 
             if self.config.show_date_in_top_panel {
-                if self.config.show_weekday {
+                let formatted = if self.config.show_weekday {
                     let mut fs = fieldsets::MDET::medium();
                     if !self.config.show_seconds {
                         fs = fs.with_time_precision(TimePrecision::Minute);
@@ -287,6 +334,10 @@ impl Window {
                         .unwrap()
                         .format(&datetime)
                         .to_string()
+                };
+                match self.panel_week_number() {
+                    Some(week) => format!("{formatted} {week}"),
+                    None => formatted,
                 }
             } else {
                 let mut fs = fieldsets::T::medium();

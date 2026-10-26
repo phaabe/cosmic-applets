@@ -1,1 +1,3 @@
 datetime-settings = Date, Time and Calendar Settings...
+week = Wk
+week-number = W{ $number }
